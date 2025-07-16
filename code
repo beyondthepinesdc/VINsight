@@ -1,0 +1,193 @@
+from pathlib import Path
+import shutil
+
+# Create main monorepo directory
+repo_path = Path("/mnt/data/VINsight_Monorepo")
+frontend_path = repo_path / "frontend"
+backend_path = repo_path / "backend"
+repo_path.mkdir(exist_ok=True)
+frontend_path.mkdir(parents=True, exist_ok=True)
+backend_path.mkdir(parents=True, exist_ok=True)
+
+# ------------------------------
+# FRONTEND: Next.js Placeholder Files
+# ------------------------------
+frontend_files = {
+    "package.json": """
+{
+  "name": "vinsight-frontend",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start"
+  },
+  "dependencies": {
+    "axios": "^1.6.0",
+    "next": "14.0.0",
+    "react": "18.2.0",
+    "react-dom": "18.2.0"
+  }
+}
+""",
+    "pages/index.js": """
+import { useState } from 'react';
+import axios from 'axios';
+
+export default function Home() {
+  const [vin, setVin] = useState('');
+  const [file, setFile] = useState(null);
+  const [result, setResult] = useState(null);
+
+  const handleSubmit = async () => {
+    let response = {};
+
+    if (vin) {
+      const vinRes = await axios.post('http://localhost:8000/decode-vin', { vin });
+      response.vinData = vinRes.data;
+    }
+
+    if (file) {
+      const formData = new FormData();
+      formData.append('file', file);
+      const pdfRes = await axios.post('http://localhost:8000/analyze-pdf', formData, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      response.pdfData = pdfRes.data;
+    }
+
+    setResult(response);
+  };
+
+  return (
+    <div style={{ padding: 40 }}>
+      <h1>VINsight Prototype</h1>
+      <input
+        type="text"
+        placeholder="Enter VIN"
+        value={vin}
+        onChange={(e) => setVin(e.target.value)}
+        style={{ padding: 10, marginBottom: 10, width: '100%' }}
+      />
+      <input
+        type="file"
+        accept=".pdf"
+        onChange={(e) => setFile(e.target.files[0])}
+        style={{ marginBottom: 10 }}
+      />
+      <button onClick={handleSubmit} style={{ padding: 10 }}>Analyze</button>
+
+      {result && (
+        <div style={{ marginTop: 20 }}>
+          <h2>Result</h2>
+          <pre>{JSON.stringify(result, null, 2)}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+"""
+}
+
+# ------------------------------
+# BACKEND: FastAPI PDF + VIN logic
+# ------------------------------
+backend_files = {
+    "main.py": """
+from fastapi import FastAPI, UploadFile, File
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+import fitz  # PyMuPDF
+import requests
+
+app = FastAPI()
+
+# CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class VINRequest(BaseModel):
+    vin: str
+
+@app.post("/decode-vin")
+def decode_vin(data: VINRequest):
+    vin = data.vin
+    url = f"https://vpic.nhtsa.dot.gov/api/vehicles/decodevinvalues/{vin}?format=json"
+    r = requests.get(url)
+    return r.json()
+
+@app.post("/analyze-pdf")
+async def analyze_pdf(file: UploadFile = File(...)):
+    text_output = ""
+    with fitz.open(stream=await file.read(), filetype="pdf") as doc:
+        for page in doc:
+            text_output += page.get_text()
+
+    # Simple keyword check
+    flags = []
+    keywords = ["commercial", "fleet", "rental", "uber", "lyft", "tnc", "delivery"]
+    for word in keywords:
+        if word in text_output.lower():
+            flags.append(word)
+
+    return {
+        "flags_detected": flags,
+        "summary": f"{len(flags)} potential rideshare-related keywords found."
+    }
+"""
+}
+
+# Write frontend and backend files
+for filename, content in frontend_files.items():
+    file_path = frontend_path / filename
+    file_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(file_path, "w") as f:
+        f.write(content.strip())
+
+for filename, content in backend_files.items():
+    with open(backend_path / filename, "w") as f:
+        f.write(content.strip())
+
+# Write main README and .env example
+with open(repo_path / "README.md", "w") as f:
+    f.write("""
+# VINsight Monorepo
+
+This is the MVP prototype for VINsight. It includes:
+
+- `frontend/` - Next.js frontend for VIN + PDF uploads
+- `backend/` - FastAPI backend with PDF parsing and VIN decoding
+
+## Local Dev Instructions
+
+### Backend (FastAPI)
+```bash
+cd backend
+pip install fastapi uvicorn PyMuPDF requests
+uvicorn main:app --reload --port 8000
+```
+
+### Frontend (Next.js)
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Then open http://localhost:3000
+
+## Deployment
+- Deploy frontend to **Vercel**
+- Deploy backend to **Render** or **Railway**
+""")
+
+# Zip the repo
+zip_path = "/mnt/data/VINsight_Monorepo.zip"
+shutil.make_archive(zip_path.replace(".zip", ""), 'zip', repo_path)
+
+zip_path
